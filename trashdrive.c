@@ -8,10 +8,13 @@
 
 #include <time.h>
 
+
 #define LOG(fmt, ...) do {				\
 	fprintf(stderr, fmt, ## __VA_ARGS__);		\
 	putc('\n', stderr);				\
 } while(0)
+
+#define LOG_DEBUG LOG
 
 #define LOG_FATAL LOG
 
@@ -92,7 +95,7 @@ static void tree_l_dir(uv_loop_t *loop, char *path);
 
 static void file_in_dir_stat_cb(uv_fs_t *req)
 {
-	ASSERT(req->type == UV_FS_LSTAT);
+	ASSERT(req->fs_type == UV_FS_LSTAT);
 	/* is it newer than store? if so, note that a new backup is needed */
 	struct stat *st = req->ptr;
 	if (st->st_mtime > file_lookup(req->path)->mtime) {
@@ -111,8 +114,7 @@ static void file_in_dir_stat_cb(uv_fs_t *req)
 /* On a directory that needs all lower files & directories mapped */
 static void readdir_cb(uv_fs_t *req)
 {
-	LOG("req->type = %d", req->type);
-	ASSERT(req->type == UV_FS_READDIR);
+	ASSERT(req->fs_type == UV_FS_READDIR);
 
 	size_t file_ct  = req->result;
 	char *flist     = req->ptr;

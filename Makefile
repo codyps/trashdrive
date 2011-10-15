@@ -46,4 +46,13 @@ $(TARGETS) :
 clean:
 	$(RM) $(TARGETS) *.d *.o
 
+.PHONY: test-dirs
+test-dirs:
+	$(MKDIR) test test.cache
+
+.PHONY:
+test: $(TARGETS)
+	./trashdrive test test.cache
+
+
 -include $(wildcard *.d)
