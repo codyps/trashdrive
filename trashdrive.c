@@ -69,12 +69,13 @@ static void dir_event_cb(uv_fs_event_t *handle, const char *filename, int events
 		return;
 	}
 
+	char *full_path = pathcatdup(handle->filename, filename);
+
 	/* mark as needing a new backup */
-	mark_newer(filename);
+	mark_newer(full_path);
 
 	/* if a dir was added, do readdir_cb */
 	uv_fs_t *req = malloc(sizeof(*req));
-	char *full_path = pathcatdup(handle->filename, filename);
 	uv_fs_lstat(handle->loop, req, full_path, file_in_dir_stat_cb);
 	free(full_path);
 }
