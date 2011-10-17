@@ -62,8 +62,13 @@ static char *pathcatdup(const char *base, const char *rest)
 
 static void dir_event_cb(uv_fs_event_t *handle, const char *filename, int events, __unused int status)
 {
+	/* No recognized event, ignore. */
+	if (!((events) & (UV_CHANGE | UV_RENAME))) {
+		return;
+	}
+
 	/* if the dir the watch was on was removed, destroy the watch */
-	if ((events & UV_CHANGE) && !strcmp(filename, basename(handle->filename))) {
+	if (!strcmp(filename,"") ) {
 		uv_close((uv_handle_t *)handle, /* uv_close_cb */NULL);
 		free(handle);
 		return;
@@ -157,9 +162,11 @@ static void readdir_cb(uv_fs_t *req)
 
 static void tree_l_dir(uv_loop_t *loop, char *path)
 {
+	/* FIXME: what if we are already watching this directory? */
 	uv_fs_event_t *handle = malloc(sizeof(*handle));
 	uv_fs_event_init(loop, handle, path, dir_event_cb);
 
+	/* FIXME: we need to not trigger on our processes
 	uv_fs_t *req = malloc(sizeof(*req));
 	uv_fs_readdir(loop, req, path, 0, readdir_cb);
 }
