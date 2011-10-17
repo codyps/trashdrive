@@ -1,13 +1,11 @@
-#define _GNU_SOURCE /* for basename */
 #include <string.h>
-
 #include <stdio.h>
-#include <uv.h>
-
 #include <stdlib.h>
 
-#include <time.h>
+#include <uv.h>
 
+/* NOT PORTABLE */
+#include <time.h>
 
 #define LOG(fmt, ...) do {				\
 	fprintf(stderr, fmt, ## __VA_ARGS__);		\
@@ -15,7 +13,6 @@
 } while(0)
 
 #define LOG_DEBUG LOG
-
 #define LOG_FATAL LOG
 
 #define p_debug(fmt, ...) do {				\
@@ -23,7 +20,6 @@
 	fprintf(stderr, "%s:%d:", __FILE__, __LINE__);	\
 	fprintf(stderr, fmt, ## __VA_ARGS__);		\
 } while(0)
-
 
 /* uv_fs_event { UV_HANDLE; char* filename }
  * UV_HANDLE   { uv_loop_t* loop; uv_handle_type type; uv_close_cb close_cb; void *data }
@@ -35,7 +31,6 @@
  * UV_REQ
  */
 
-
 #include <assert.h>
 #define ASSERT assert
 
@@ -45,7 +40,6 @@ static void mark_newer(const char *filename)
 }
 
 static void file_in_dir_stat_cb(uv_fs_t *req);
-
 
 static char *pathcatdup(const char *base, const char *rest)
 {
@@ -166,7 +160,7 @@ static void tree_l_dir(uv_loop_t *loop, char *path)
 	uv_fs_event_t *handle = malloc(sizeof(*handle));
 	uv_fs_event_init(loop, handle, path, dir_event_cb);
 
-	/* FIXME: we need to not trigger on our processes
+	/* FIXME: we need to not trigger on our processes */
 	uv_fs_t *req = malloc(sizeof(*req));
 	uv_fs_readdir(loop, req, path, 0, readdir_cb);
 }
