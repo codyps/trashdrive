@@ -6,6 +6,16 @@
 
 #include <tommyds/tommy.h>
 
+#if 0
+#include <linux/fanotify.h>
+/* Allows "watching" on a given path. doesn't get creates, moves, & deletes, so
+ * is essentially useless to
+ * us. */
+#endif
+
+/* spawn watchers on every directory */
+#include <linux/inotify.h>
+
 struct sync_path {
 	char const *dir_path;
 	int dir_fd;
@@ -15,12 +25,18 @@ struct sync_path {
 	tommy_hash_lin entries;
 
 	pthread_t io_th;
-};
 
+	/* elements are <something that refers to directories> that need to be
+	 * scanned for new watches. */
+	elq_t *to_scan;
+};
 
 void *sp_index_daemon(void *varg)
 {
 	struct sync_path *sp = varg;
+	LIST_HEAD(to_scan);
+
+	/* dirent sizing */
 	size_t name_max = pathconf(sp->dir_path, _PC_NAME_MAX);
 	if (name_max == -1)
 		name_max = 255;
@@ -44,6 +60,8 @@ void *sp_index_daemon(void *varg)
 			fprintf(stderr, "readdir_r() failed: %s\n", strerror(errno));
 			exit(1);
 		}
+
+		if (entry->
 
 		if (!entry)
 			break;
