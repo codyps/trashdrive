@@ -4,7 +4,7 @@
 
 #include <unistd.h>
 
-#include <tommyds/tommy.h>
+#include "tommyds/tommy.h"
 
 #if 0
 #include <linux/fanotify.h>
