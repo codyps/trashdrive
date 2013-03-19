@@ -3,7 +3,9 @@
 #include <string.h>
 
 #include <unistd.h>
+#include <errno.h>
 
+#include "block_list.h"
 #include "tommyds/tommy.h"
 
 #if 0
@@ -28,10 +30,10 @@ struct sync_path {
 
 	/* elements are <something that refers to directories> that need to be
 	 * scanned for new watches. */
-	elq_t *to_scan;
+	struct block_list to_scan;
 };
 
-void *sp_index_daemon(void *varg)
+static void *sp_index_daemon(void *varg)
 {
 	struct sync_path *sp = varg;
 	LIST_HEAD(to_scan);
@@ -40,7 +42,7 @@ void *sp_index_daemon(void *varg)
 	size_t name_max = pathconf(sp->dir_path, _PC_NAME_MAX);
 	if (name_max == -1)
 		name_max = 255;
-	len = offsetof(struct dirent, d_name) + name_max + 1;
+	size_t len = offsetof(struct dirent, d_name) + name_max + 1;
 	struct dirent *entry = malloc(len);
 	if (!entry) {
 		fprintf(stderr, "failed to allocate entry\n");
@@ -91,7 +93,7 @@ int sp_open(struct sync_path *sp, char const *path)
 	return 0;
 }
 
-void usage(void)
+void usage(const char *prog_name)
 {
 	fprintf(stderr, "usage: %s <sync path>\n", prog_name);
 	exit(1);
@@ -100,7 +102,7 @@ void usage(void)
 int main(int argc, char **argv)
 {
 	if (argc != 2) {
-		usage();
+		usage(argc?argv[0]:"index");
 	}
 
 	struct sync_path sp;

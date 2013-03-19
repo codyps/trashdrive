@@ -1,5 +1,6 @@
 #include "block_list.h"
 
+#define BASE_SIZE sizeof(struct block_list)
 /* takes up some room in the allocated block */
 struct blist_block {
 	struct list_head list;
@@ -9,22 +10,6 @@ struct blist_block {
 	unsigned char __data[];
 };
 #define BLOCK_OVERHEAD offsetof(struct blist_block, __data[0])
-
-struct block_list {
-	/* keep track of the used portion of blocks to guess at optimal block
-	 * allocation sizes */
-	size_t block_size_initial,
-	       block_size_largest,
-	       /* when a block is dequeued, we add it to this and divide by 2
-		*/
-	       block_size_weighted_average,
-	       block_size_next;
-
-	size_t elem_size; /* TODO: allow variable size elements */
-	size_t block_ct;
-	struct list_head blocks;
-};
-#define BASE_SIZE sizeof(struct block_list)
 
 #define EMPTY_BLOCK(size) (blist_t){ .head = 0, .tail = 0, .size = size }
 #define MIN_INITIAL_BLOCK_SIZE 64
