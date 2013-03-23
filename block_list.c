@@ -1,5 +1,6 @@
 #include "block_list.h"
 
+#define BASE_SIZE sizeof(struct block_list)
 /* takes up some room in the allocated block */
 struct blist_block {
 	struct list_head list;
@@ -8,32 +9,16 @@ struct blist_block {
 
 	unsigned char __data[];
 };
-#define BLOCK_OVERHEAD offsetof(struct elq_block, __data[0])
+#define BLOCK_OVERHEAD offsetof(struct blist_block, __data[0])
 
-struct block_list {
-	/* keep track of the used portion of blocks to guess at optimal block
-	 * allocation sizes */
-	size_t block_size_initial,
-	       block_size_largest,
-	       /* when a block is dequeued, we add it to this and divide by 2
-		*/
-	       block_size_weighted_average,
-	       block_size_largest_diff,
-	       block_size_next;
+#define EMPTY_BLOCK(size) (blist_t){ .head = 0, .tail = 0, .size = size }
+#define MIN_INITIAL_BLOCK_SIZE 64
+#define MIN_BLOCK_SIZE 64
 
-	size_t elem_size; /* TODO: allow variable size elements */
-	size_t block_ct;
-	struct list_head blocks;
-};
-
-#define BL_EMPTY_BLOCK(size) (elq_t){ .head = 0, .tail = 0, .size = size }
-#define BL_MIN_INITIAL_BLOCK_SIZE 64
-#define BL_MIN_BLOCK_SIZE 64
-
-#if BL_MIN_INITIAL_BLOCK_SIZE < BL_BLOCK_OVERHEAD
+#if MIN_INITIAL_BLOCK_SIZE < BL_BLOCK_OVERHEAD
 # error
 #endif
-#if ELQ_MIN_BLOCK_SIZE < ELQ_BLOCK_OVERHEAD
+#if MIN_BLOCK_SIZE < BLOCK_OVERHEAD
 # error
 #endif
 
@@ -52,7 +37,7 @@ void blist_init(blist_t *bl, size_t elem_size, size_t initial_block_elem_ct)
 	size_t fst_sz;
 	size_t blocksize;
 	if (EMPTY_SIZE + min_init_blk_sz > pagesize) {
-		fst_sz = ELQ_EMPTY_SIZE + min_init_blk_sz;
+		fst_sz = BL_EMPTY_SIZE + min_init_blk_sz;
 		blocksize = min_blk_sz;
 	} else {
 		fst_sz = pagesize;
