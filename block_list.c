@@ -18,6 +18,7 @@ struct block_list {
 	       /* when a block is dequeued, we add it to this and divide by 2
 		*/
 	       block_size_weighted_average,
+	       block_size_largest_diff,
 	       block_size_next;
 
 	size_t elem_size; /* TODO: allow variable size elements */
