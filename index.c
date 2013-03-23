@@ -22,10 +22,7 @@ struct sync_path {
 	char const *dir_path;
 	int dir_fd;
 
-	/* we put all files in 1 hash table, no trees here. */
-	/* FIXME: I'm a lazy bum */
 	tommy_hash_lin entries;
-
 	pthread_t io_th;
 
 	/* elements are <something that refers to directories> that need to be
