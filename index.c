@@ -22,8 +22,10 @@
 struct dir {
 	struct dir *parent;
 	DIR *dir;
-	struct dirent d;
-	/* Note: dirent is sized as is appropriate via _PC_NAME_MAX */
+
+	/* both are relative to the parent */
+	size_t name_len;
+	char name[];
 };
 
 struct sync_path {
@@ -50,25 +52,30 @@ static size_t dir_full_path_length(struct dir *parent)
 {
 	size_t s = 0;
 	while(parent) {
-		s += parent->d.d_reclen;
+		s += parent->name_len;
 		parent = parent->parent;
 	}
 
 	return s;
 }
 
-static void scan_this_dir(struct sync_path *sp, char const *relative_path,
-		size_t rel_path_len, struct dir *parent)
+static void scan_this_dir(struct sync_path *sp, struct dir *d)
 {
 	char const *path;
-	size_t path_len;
-	if (!parent) {
-		path = relative_path;
-		path_len = rel_path_len;
-	} else {
-		path_len = dir_full_path_length(parent) + rel_path_len;
-		path = malloc(path_len);
-	}
+	size_t path_len = dir_full_path_length(d->parent) + d->name_len;
+}
+
+static struct dir *dir_create_exact(char const *path, size_t path_len, struct dir *parent)
+{
+	struct dir *d = malloc(offsetof(struct dir, name) + path_len + 1);
+
+	d->parent = parent;
+	d->dir = diropen(path);
+
+	d->name_len = path_len;
+	memcpy(d->name, path, path_len + 1);
+
+	return d;
 }
 
 static void *sp_index_daemon(void *varg)
@@ -76,25 +83,17 @@ static void *sp_index_daemon(void *varg)
 	struct sync_path *sp = varg;
 
 	/* enqueue base dir in to_scan */
-	sp->root = dir_create_exact(sp->dir_path);
-	scan_this_dir(sp, sp->root, NULL);
+	sp->dir_path_len = strlen(sp->dir_path);
+	sp->root = dir_create_exact(sp->dir_path, sp->dir_path_len, NULL);
+	scan_this_dir(sp, sp->root);
 
-	/* dirent sizing */
-	struct dirent *entry = malloc(path_dir);
-	if (!entry) {
-		fprintf(stderr, "failed to allocate entry\n");
-		exit(1);
-	}
-
-	DIR *dir = fdopendir(sp->dir_fd);
-	if (!dir) {
-		fprintf(stderr, "something went wrong.\n");
-		exit(1);
-	}
+	size_t len = path_dirent_size(sp->dir_path);
+	struct dirent *d = malloc(len);
 
 	for (;;) {
+		struct dir *dir = wait_for_dir_to_scan();
 		struct dirent *result;
-		int r = readdir_r(dir, entry, &result);
+		int r = readdir_r(dir, d, &result);
 		if (r) {
 			fprintf(stderr, "readdir_r() failed: %s\n", strerror(errno));
 			exit(1);
@@ -104,16 +103,12 @@ static void *sp_index_daemon(void *varg)
 			/* done with this dir */
 			break;
 
-		if (entry->d_type == DT_DIR) {
-			scan_this_dir(
-			sp_queue_dir(sp, );
-			entry = malloc(len);
-			if (!entry) {
-				fprintf(stderr, "OOM\n");
-				exit(1);
-			}
+		if (d->d_type == DT_DIR) {
+			struct dir *child = dir_create_exact(d->d_name, dirent_name_len(d), dir)
+			scan_this_dir(sp, child);
 		}
 
+		/* add notifiers */
 	}
 }
 
