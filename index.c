@@ -7,6 +7,7 @@
 
 #include "block_list.h"
 #include "tommyds/tommy.h"
+#include "penny/list.h"
 
 #if 0
 #include <linux/fanotify.h>
@@ -18,29 +19,68 @@
 /* spawn watchers on every directory */
 #include <linux/inotify.h>
 
+struct dir {
+	struct dir *parent;
+	DIR *dir;
+	struct dirent d;
+	/* Note: dirent is sized as is appropriate via _PC_NAME_MAX */
+};
+
 struct sync_path {
 	char const *dir_path;
-	int dir_fd;
+	struct dir *root;
 
 	tommy_hash_lin entries;
 	pthread_t io_th;
 
 	/* elements are <something that refers to directories> that need to be
 	 * scanned for new watches. */
-	struct block_list to_scan;
+	struct list_head to_scan;
 };
+
+static size_t path_dirent_size(char const *path)
+{
+	size_t name_max = pathconf(path, _PC_NAME_MAX);
+	if (name_max == -1)
+		name_max = 255;
+	return offsetof(struct dirent, d_name) + name_max + 1;
+}
+
+static size_t dir_full_path_length(struct dir *parent)
+{
+	size_t s = 0;
+	while(parent) {
+		s += parent->d.d_reclen;
+		parent = parent->parent;
+	}
+
+	return s;
+}
+
+static void scan_this_dir(struct sync_path *sp, char const *relative_path,
+		size_t rel_path_len, struct dir *parent)
+{
+	char const *path;
+	size_t path_len;
+	if (!parent) {
+		path = relative_path;
+		path_len = rel_path_len;
+	} else {
+		path_len = dir_full_path_length(parent) + rel_path_len;
+		path = malloc(path_len);
+	}
+}
 
 static void *sp_index_daemon(void *varg)
 {
 	struct sync_path *sp = varg;
-	LIST_HEAD(to_scan);
+
+	/* enqueue base dir in to_scan */
+	sp->root = dir_create_exact(sp->dir_path);
+	scan_this_dir(sp, sp->root, NULL);
 
 	/* dirent sizing */
-	size_t name_max = pathconf(sp->dir_path, _PC_NAME_MAX);
-	if (name_max == -1)
-		name_max = 255;
-	size_t len = offsetof(struct dirent, d_name) + name_max + 1;
-	struct dirent *entry = malloc(len);
+	struct dirent *entry = malloc(path_dir);
 	if (!entry) {
 		fprintf(stderr, "failed to allocate entry\n");
 		exit(1);
@@ -53,17 +93,27 @@ static void *sp_index_daemon(void *varg)
 	}
 
 	for (;;) {
-		struct dirent entry, *result;
-		int r = readdir_r(dir, &entry, &result);
+		struct dirent *result;
+		int r = readdir_r(dir, entry, &result);
 		if (r) {
 			fprintf(stderr, "readdir_r() failed: %s\n", strerror(errno));
 			exit(1);
 		}
 
-		if (entry->
-
-		if (!entry)
+		if (!result)
+			/* done with this dir */
 			break;
+
+		if (entry->d_type == DT_DIR) {
+			scan_this_dir(
+			sp_queue_dir(sp, );
+			entry = malloc(len);
+			if (!entry) {
+				fprintf(stderr, "OOM\n");
+				exit(1);
+			}
+		}
+
 	}
 }
 
@@ -73,12 +123,10 @@ int sp_open(struct sync_path *sp, char const *path)
 		.dir_path = path,
 	};
 
-
-	int r = open(sp->dir_path, O_RDONLY);
-	if (r == -1)
+	if (!access(path, R_OK)) {
+		fprintf(stderr, "could not access the sync_path\n");
 		return -1;
-
-	sp->dir_fd = r;
+	}
 
 	tommy_hashlin_init(&sp->entries);
 
