@@ -17,7 +17,7 @@
 #endif
 
 /* spawn watchers on every directory */
-#include <linux/inotify.h>
+#include <sys/inotify.h>
 
 struct dir {
 	struct dir *parent;
@@ -69,27 +69,45 @@ static struct dir *dir_create_exact(char const *path, size_t path_len, struct di
 {
 	struct dir *d = malloc(offsetof(struct dir, name) + path_len + 1);
 
-	d->parent = parent;
 	d->dir = diropen(path);
+	if (!d) {
+		free(d);
+		return NULL;
+	}
 
+	d->parent = parent;
 	d->name_len = path_len;
 	memcpy(d->name, path, path_len + 1);
 
 	return d;
 }
 
+struct vec {
+	size_t bytes;
+	unsigned char *data;
+};
+
+#define VEC_INIT() { .bytes = 0, .data = NULL }
+
+static void vec_grow(struct vec *v, size_t min_size)
+{
+
+}
+
+static char *full_path_of_entry(struct dir *dir, struct dirent *d, struct vec *v)
+{
+	vec_grow(v, dir_full_path_length(dir) + d->d_len);
+}
+
 static void *sp_index_daemon(void *varg)
 {
 	struct sync_path *sp = varg;
 
-	/* enqueue base dir in to_scan */
-	sp->dir_path_len = strlen(sp->dir_path);
-	sp->root = dir_create_exact(sp->dir_path, sp->dir_path_len, NULL);
-	scan_this_dir(sp, sp->root);
-
+	/* FIXME: this will break if the sync dir contains multiple filesystems. */
 	size_t len = path_dirent_size(sp->dir_path);
-	struct dirent *d = malloc(len);
 
+	struct dirent *d = malloc(len);
+	struct vec v = VEC_INIT();
 	for (;;) {
 		struct dir *dir = wait_for_dir_to_scan();
 		struct dirent *result;
@@ -103,12 +121,20 @@ static void *sp_index_daemon(void *varg)
 			/* done with this dir */
 			break;
 
+		/* TODO: add option to avoid leaving the current filesystem
+		 * (ie: "only one fs") */
+
 		if (d->d_type == DT_DIR) {
 			struct dir *child = dir_create_exact(d->d_name, dirent_name_len(d), dir)
 			scan_this_dir(sp, child);
 		}
 
 		/* add notifiers */
+		inotify_add_watch(sp->inotify_fd, full_path_of_entry(dir, d),
+				IN_ATTRIB | IN_CREATE | IN_DELETE |
+				IN_DELETE_SELF | IN_MODIFY | IN_MOVE_SELF |
+				IN_MOVED_FROM | IN_MOVED_TO | IN_DONT_FOLLOW |
+				IN_EXCL_UNLINK);
 	}
 }
 
@@ -116,6 +142,7 @@ int sp_open(struct sync_path *sp, char const *path)
 {
 	*sp = typeof(*sp) {
 		.dir_path = path,
+		.dir_path_len = strlen(path);
 	};
 
 	if (!access(path, R_OK)) {
@@ -123,9 +150,22 @@ int sp_open(struct sync_path *sp, char const *path)
 		return -1;
 	}
 
+	sp->inotify_fd = inotify_init();
+	if (sp->inotify_fd < 0)
+		return -2;
+
+	INIT_LIST_HEAD(&sp->to_scan);
+
+	/* enqueue base dir in to_scan */
+	sp->root = dir_create_exact(sp->dir_path, sp->dir_path_len, NULL);
+	if (!sp->root)
+		return -3;
+	scan_this_dir(sp, sp->root);
+
 	tommy_hashlin_init(&sp->entries);
 
-	/* should we spawn a thread to handle the scanning of the directory? I think so */
+	/* should we spawn a thread to handle the scanning of the directory? I
+	 * think so */
 	r = pthread_create(&sp->io_th, NULL, sp_index_daemon, sp);
 	if (r)
 		return r;
