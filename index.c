@@ -11,6 +11,7 @@
 
 #include "block_list.h"
 #include "tommyds/tommy.h"
+#include "penny/penny.h"
 #include "penny/list.h"
 
 #if 0
@@ -36,7 +37,11 @@ struct dir {
 
 struct sync_path {
 	char const *dir_path;
+	size_t dir_path_len;
+
 	struct dir *root;
+
+	int inotify_fd;
 
 	tommy_hashlin entries;
 	tommy_hashlin wd_to_path;
@@ -76,6 +81,24 @@ static void scan_this_dir(struct sync_path *sp, struct dir *d)
 	pthread_mutex_unlock(&sp->to_scan_lock);
 }
 
+static void retry_dir_scan(struct sync_path *sp, struct dir *d)
+{
+	scan_this_dir(sp, d);
+}
+
+static struct dir *wait_for_dir_to_scan(struct sync_path *sp)
+{
+	int rc = 0;
+	struct dir *d;
+	pthread_mutex_lock(&sp->to_scan_lock);
+	while (list_empty(&sp->to_scan) && rc == 0)
+		rc = pthread_cond_wait(&sp->to_scan_cond, &sp->to_scan_lock);
+	d = list_entry(sp->to_scan.next, typeof(*d), to_scan_entry);
+	list_del(&d->to_scan_entry);
+	pthread_mutex_unlock(&sp->to_scan_lock);
+	return d;
+}
+
 static struct dir *dir_create_exact(char const *path, size_t path_len, struct dir *parent)
 {
 	struct dir *d = malloc(offsetof(struct dir, name) + path_len + 1);
@@ -94,7 +117,7 @@ static struct dir *dir_create_exact(char const *path, size_t path_len, struct di
 
 struct vec {
 	size_t bytes;
-	unsigned char *data;
+	void *data;
 };
 
 #define VEC_INIT() { .bytes = 0, .data = NULL }
@@ -137,9 +160,9 @@ static void *sp_index_daemon(void *varg)
 	struct dirent *d = malloc(len);
 	struct vec v = VEC_INIT();
 	for (;;) {
-		struct dir *dir = wait_for_dir_to_scan();
+		struct dir *dir = wait_for_dir_to_scan(sp);
 		struct dirent *result;
-		int r = readdir_r(dir, d, &result);
+		int r = readdir_r(dir->dir, d, &result);
 		if (r) {
 			fprintf(stderr, "readdir_r() failed: %s\n", strerror(errno));
 			retry_dir_scan(sp, dir);
@@ -154,12 +177,12 @@ static void *sp_index_daemon(void *varg)
 		 * (ie: "only one fs") */
 
 		if (d->d_type == DT_DIR) {
-			struct dir *child = dir_create_exact(d->d_name, dirent_name_len(d), dir)
+			struct dir *child = dir_create_exact(d->d_name, dirent_name_len(d), dir);
 			scan_this_dir(sp, child);
 		}
 
 		/* add notifiers */
-		int wd = inotify_add_watch(sp->inotify_fd, full_path_of_entry(dir, d),
+		int wd = inotify_add_watch(sp->inotify_fd, full_path_of_entry(dir, d, &v),
 				IN_ATTRIB | IN_CREATE | IN_DELETE |
 				IN_DELETE_SELF | IN_MODIFY | IN_MOVE_SELF |
 				IN_MOVED_FROM | IN_MOVED_TO | IN_DONT_FOLLOW |
@@ -171,15 +194,17 @@ static void *sp_index_daemon(void *varg)
 
 
 	}
+
+	return NULL;
 }
 
-int sp_open(struct sync_path *sp, char const *path)
+static int sp_open(struct sync_path *sp, char const *path)
 {
-	*sp = typeof(*sp) {
+	*sp = (typeof(*sp)) {
 		.dir_path = path,
 		.dir_path_len = strlen(path),
 
-		.to_scan = LIST_HEAD_INIT(&sp->to_scan),
+		.to_scan = LIST_HEAD_INIT(sp->to_scan),
 		.to_scan_cond = PTHREAD_COND_INITIALIZER,
 		.to_scan_lock = PTHREAD_MUTEX_INITIALIZER,
 	};
@@ -203,14 +228,14 @@ int sp_open(struct sync_path *sp, char const *path)
 
 	/* should we spawn a thread to handle the scanning of the directory? I
 	 * think so */
-	r = pthread_create(&sp->io_th, NULL, sp_index_daemon, sp);
+	int r = pthread_create(&sp->io_th, NULL, sp_index_daemon, sp);
 	if (r)
 		return r;
 
 	return 0;
 }
 
-void usage(const char *prog_name)
+static void usage(const char *prog_name)
 {
 	fprintf(stderr, "usage: %s <sync path>\n", prog_name);
 	exit(1);
