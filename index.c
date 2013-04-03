@@ -4,6 +4,10 @@
 
 #include <unistd.h>
 #include <errno.h>
+#include <pthread.h>
+
+#include <sys/types.h>
+#include <dirent.h>
 
 #include "block_list.h"
 #include "tommyds/tommy.h"
@@ -23,6 +27,8 @@ struct dir {
 	struct dir *parent;
 	DIR *dir;
 
+	struct list_head to_scan_entry;
+
 	/* both are relative to the parent */
 	size_t name_len;
 	char name[];
@@ -32,12 +38,16 @@ struct sync_path {
 	char const *dir_path;
 	struct dir *root;
 
-	tommy_hash_lin entries;
+	tommy_hashlin entries;
+	tommy_hashlin wd_to_path;
+
 	pthread_t io_th;
 
 	/* elements are <something that refers to directories> that need to be
 	 * scanned for new watches. */
 	struct list_head to_scan;
+	pthread_mutex_t  to_scan_lock;
+	pthread_cond_t   to_scan_cond;
 };
 
 static size_t path_dirent_size(char const *path)
@@ -55,21 +65,22 @@ static size_t dir_full_path_length(struct dir *parent)
 		s += parent->name_len;
 		parent = parent->parent;
 	}
-
 	return s;
 }
 
 static void scan_this_dir(struct sync_path *sp, struct dir *d)
 {
-	char const *path;
-	size_t path_len = dir_full_path_length(d->parent) + d->name_len;
+	pthread_mutex_lock(&sp->to_scan_lock);
+	list_add_tail(&d->to_scan_entry, &sp->to_scan);
+	pthread_cond_signal(&sp->to_scan_cond);
+	pthread_mutex_unlock(&sp->to_scan_lock);
 }
 
 static struct dir *dir_create_exact(char const *path, size_t path_len, struct dir *parent)
 {
 	struct dir *d = malloc(offsetof(struct dir, name) + path_len + 1);
 
-	d->dir = diropen(path);
+	d->dir = opendir(path);
 	if (!d) {
 		free(d);
 		return NULL;
@@ -78,7 +89,6 @@ static struct dir *dir_create_exact(char const *path, size_t path_len, struct di
 	d->parent = parent;
 	d->name_len = path_len;
 	memcpy(d->name, path, path_len + 1);
-
 	return d;
 }
 
@@ -89,14 +99,32 @@ struct vec {
 
 #define VEC_INIT() { .bytes = 0, .data = NULL }
 
-static void vec_grow(struct vec *v, size_t min_size)
+static int vec_reinit_grow(struct vec *v, size_t min_size)
 {
+	if (min_size > v->bytes) {
+		free(v->data);
+		v->data = malloc(min_size);
+		return -1;
+	}
 
+	return 0;
+}
+
+static size_t dirent_name_len(struct dirent *d)
+{
+	/* FIXME: not quite correct: while this will be valid, the name field
+	 * could be termintated early with a '\0', causing this to
+	 * overestimate.
+	 * TODO: Determine whether this is a problem.
+	 */
+	return d->d_reclen - offsetof(struct dirent, d_name);
 }
 
 static char *full_path_of_entry(struct dir *dir, struct dirent *d, struct vec *v)
 {
-	vec_grow(v, dir_full_path_length(dir) + d->d_len);
+	vec_reinit_grow(v, dir_full_path_length(dir) + dirent_name_len(d));
+	/* TODO: */
+	return v->data;
 }
 
 static void *sp_index_daemon(void *varg)
@@ -114,7 +142,8 @@ static void *sp_index_daemon(void *varg)
 		int r = readdir_r(dir, d, &result);
 		if (r) {
 			fprintf(stderr, "readdir_r() failed: %s\n", strerror(errno));
-			exit(1);
+			retry_dir_scan(sp, dir);
+			continue;
 		}
 
 		if (!result)
@@ -130,11 +159,17 @@ static void *sp_index_daemon(void *varg)
 		}
 
 		/* add notifiers */
-		inotify_add_watch(sp->inotify_fd, full_path_of_entry(dir, d),
+		int wd = inotify_add_watch(sp->inotify_fd, full_path_of_entry(dir, d),
 				IN_ATTRIB | IN_CREATE | IN_DELETE |
 				IN_DELETE_SELF | IN_MODIFY | IN_MOVE_SELF |
 				IN_MOVED_FROM | IN_MOVED_TO | IN_DONT_FOLLOW |
 				IN_EXCL_UNLINK);
+		if (wd == -1) {
+			fprintf(stderr, "inotify_add_watch failed: %s\n", strerror(errno));
+			continue;
+		}
+
+
 	}
 }
 
@@ -142,8 +177,14 @@ int sp_open(struct sync_path *sp, char const *path)
 {
 	*sp = typeof(*sp) {
 		.dir_path = path,
-		.dir_path_len = strlen(path);
+		.dir_path_len = strlen(path),
+
+		.to_scan = LIST_HEAD_INIT(&sp->to_scan),
+		.to_scan_cond = PTHREAD_COND_INITIALIZER,
+		.to_scan_lock = PTHREAD_MUTEX_INITIALIZER,
 	};
+
+	tommy_hashlin_init(&sp->entries);
 
 	if (!access(path, R_OK)) {
 		fprintf(stderr, "could not access the sync_path\n");
@@ -154,15 +195,11 @@ int sp_open(struct sync_path *sp, char const *path)
 	if (sp->inotify_fd < 0)
 		return -2;
 
-	INIT_LIST_HEAD(&sp->to_scan);
-
 	/* enqueue base dir in to_scan */
 	sp->root = dir_create_exact(sp->dir_path, sp->dir_path_len, NULL);
 	if (!sp->root)
 		return -3;
 	scan_this_dir(sp, sp->root);
-
-	tommy_hashlin_init(&sp->entries);
 
 	/* should we spawn a thread to handle the scanning of the directory? I
 	 * think so */
