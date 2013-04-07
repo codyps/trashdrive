@@ -127,7 +127,8 @@ static int vec_reinit_grow(struct vec *v, size_t min_size)
 	if (min_size > v->bytes) {
 		free(v->data);
 		v->data = malloc(min_size);
-		return -1;
+		if (!v->data)
+			return -1;
 	}
 
 	return 0;

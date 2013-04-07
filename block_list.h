@@ -18,8 +18,13 @@ struct block_list {
 	struct list_head blocks;
 };
 
-void blist_init(size_t elem_size);
+void blist_init(struct block_list *bl, size_t elem_size);
+
 struct blist_block *blist_dequeue_block(struct block_list *bl);
+void blist_enqueue_block(struct block_list *bl, struct blist_block *b);
+
+
+
 
 void *blist_dequeue_elem(void);
 
@@ -28,5 +33,6 @@ void *blist_dequeue_elem(void);
  * queue, even before data is written to the location pointed to by the
  * returned pointer. */
 void *blist_enqueue_elem(void);
+
 
 #endif
