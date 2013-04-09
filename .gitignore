@@ -4,3 +4,5 @@ trashdrive
 *.vim
 test/
 .TRACK-*
+
+/index

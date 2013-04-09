@@ -7,7 +7,7 @@
 #define BASE_SIZE sizeof(struct block_list)
 /* takes up some room in the allocated block */
 struct blist_block {
-	struct list_head list;
+	struct list_node list;
 	size_t size;
 	size_t head, tail;
 
@@ -57,9 +57,10 @@ void blist_init(struct block_list *bl, size_t elem_size)
 
 void blist_enqueue_block(struct block_list *bl, struct blist_block *b)
 {
+	list_add_tail(&bl->blocks, &b->list);
 }
 
 struct blist_block *blist_dequeue_block(struct block_list *bl)
 {
-	return NULL;
+	return list_pop(&bl->blocks, struct blist_block, list);
 }

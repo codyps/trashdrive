@@ -12,7 +12,7 @@
 #include "block_list.h"
 #include "tommyds/tommy.h"
 #include "penny/penny.h"
-#include "penny/list.h"
+#include "ccan/list/list.h"
 
 #if 0
 #include <linux/fanotify.h>
@@ -28,7 +28,7 @@ struct dir {
 	struct dir *parent;
 	DIR *dir;
 
-	struct list_head to_scan_entry;
+	struct list_node to_scan_entry;
 
 	/* both are relative to the parent */
 	size_t name_len;
@@ -76,7 +76,7 @@ static size_t dir_full_path_length(struct dir *parent)
 static void scan_this_dir(struct sync_path *sp, struct dir *d)
 {
 	pthread_mutex_lock(&sp->to_scan_lock);
-	list_add_tail(&d->to_scan_entry, &sp->to_scan);
+	list_add_tail(&sp->to_scan, &d->to_scan_entry);
 	pthread_cond_signal(&sp->to_scan_cond);
 	pthread_mutex_unlock(&sp->to_scan_lock);
 }
@@ -93,8 +93,7 @@ static struct dir *wait_for_dir_to_scan(struct sync_path *sp)
 	pthread_mutex_lock(&sp->to_scan_lock);
 	while (list_empty(&sp->to_scan) && rc == 0)
 		rc = pthread_cond_wait(&sp->to_scan_cond, &sp->to_scan_lock);
-	d = list_entry(sp->to_scan.next, typeof(*d), to_scan_entry);
-	list_del(&d->to_scan_entry);
+	d = list_pop(&sp->to_scan, typeof(*d), to_scan_entry);
 	pthread_mutex_unlock(&sp->to_scan_lock);
 	return d;
 }

@@ -1,7 +1,7 @@
 #ifndef BLOCK_LIST_H_
 #define BLOCK_LIST_H_
 
-#include "penny/list.h"
+#include <ccan/list/list.h>
 
 struct block_list {
 	/* keep track of the used portion of blocks to guess at optimal block
