@@ -1,6 +1,6 @@
 [submodule "tommyds"]
 	path = tommyds
-	url = git@vcr:cody/tommyds.git
+	url = https://github.com/jmesmon/tommyds.git
 [submodule "penny"]
 	path = penny
 	url = https://github.com/jmesmon/libpenny.git
