@@ -15,7 +15,7 @@ ccan : FORCE
 ccan.clean :
 	$(QUIET_SUBMAKE)make --no-print-directory -C $(@:.clean=) clean
 
-clean : ccan.clean
+dirclean : clean ccan.clean
 
 ALL_CFLAGS += -Dtommy_inline="static inline" -I. -Iccan -std=gnu1x -pthread
 ALL_LDFLAGS += -pthread -lrt -lccan -Lccan
