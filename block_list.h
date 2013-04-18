@@ -23,9 +23,6 @@ void blist_init(struct block_list *bl, size_t elem_size);
 struct blist_block *blist_dequeue_block(struct block_list *bl);
 void blist_enqueue_block(struct block_list *bl, struct blist_block *b);
 
-
-
-
 void *blist_dequeue_elem(void);
 
 /* returns a pointer to memory which @elem_size bytes can be written into

@@ -19,7 +19,8 @@ dirclean : clean ccan.clean
 
 ALL_CFLAGS += -Dtommy_inline="static inline" -I. -Iccan -std=gnu1x -pthread
 ALL_LDFLAGS += -pthread -lrt -lccan -Lccan
-obj-index = index.o block_list.o tommyds/tommyhashlin.o tommyds/tommylist.o
+obj-index = index.o sync_path.o block_list.o \
+	tommyds/tommyhashlin.o tommyds/tommylist.o
 index : ccan
 
 include base.mk
