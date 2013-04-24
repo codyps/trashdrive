@@ -12,6 +12,20 @@ static void usage(const char *prog_name)
 	exit(1);
 }
 
+static void on_added_file(struct sync_path *sp,
+		struct dir const *parent,
+		char const *name)
+{
+
+}
+
+static void on_event(struct sync_path *sp,
+		struct dir const *parent,
+		char const *name)
+{
+
+}
+
 int main(int argc, char **argv)
 {
 	if (argc != 2) {
@@ -19,16 +33,12 @@ int main(int argc, char **argv)
 	}
 
 	struct sync_path sp;
-	int r = sp_open(&sp, argv[1]);
+	int r = sp_open(&sp, on_added_file, on_event, argv[1]);
 	if (r) {
 		fprintf(stderr, "could not open path \"%s\": %s\n", argv[1], strerror(errno));
 		return 1;
 	}
 
-	struct sp_event e;
-	while ((r = sp_wait_for_event(&sp, &e))) {
-
-	}
-
+	sp_process(&sp);
 	return 0;
 }

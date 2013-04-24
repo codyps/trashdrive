@@ -11,6 +11,8 @@
 
 #include "sync_path.h"
 
+#include <ccan/darray/darray.h>
+
 #if 0
 #include <linux/fanotify.h>
 /* Allows "watching" on a given path. doesn't get creates, moves, & deletes, so
@@ -63,7 +65,7 @@ static struct dir *wait_for_dir_to_scan(struct sync_path *sp)
 	return d;
 }
 
-static struct dir *dir_create_exact(char const *path, size_t path_len, struct dir *parent)
+static struct dir *dir_create(char const *path, size_t path_len, struct dir *parent)
 {
 	struct dir *d = malloc(offsetof(struct dir, name) + path_len + 1);
 
@@ -79,25 +81,6 @@ static struct dir *dir_create_exact(char const *path, size_t path_len, struct di
 	return d;
 }
 
-struct vec {
-	size_t bytes;
-	void *data;
-};
-
-#define VEC_INIT() { .bytes = 0, .data = NULL }
-
-static int vec_reinit_grow(struct vec *v, size_t min_size)
-{
-	if (min_size > v->bytes) {
-		free(v->data);
-		v->data = malloc(min_size);
-		if (!v->data)
-			return -1;
-	}
-
-	return 0;
-}
-
 static size_t dirent_name_len(struct dirent *d)
 {
 	/* FIXME: not quite correct: while this will be valid, the name field
@@ -105,56 +88,128 @@ static size_t dirent_name_len(struct dirent *d)
 	 * overestimate.
 	 * TODO: Determine whether this is a problem.
 	 */
-	return d->d_reclen - offsetof(struct dirent, d_name);
+	// return d->d_reclen - offsetof(struct dirent, d_name);
+	return strlen(d->d_name);
 }
 
-static char *full_path_of_entry(struct dir *dir, struct dirent *d, struct vec *v)
+#define darray_reset(arr) do { (arr).size = 0; } while(0)
+#define darray_nullterminate(arr) darray_append(arr, '\0')
+#define darray_get(arr) ((arr).item)
+#define darray_get_cstring(arr) ({ darray_append(arr, '\0'); (arr).item; })
+
+/* appends to v */
+static void _full_path_of_dir(struct dir const *dir, darray_char *v)
 {
-	vec_reinit_grow(v, dir_full_path_length(dir) + dirent_name_len(d));
-	/* TODO: */
-	return v->data;
+	if (dir->parent)
+		_full_path_of_dir(dir->parent, v);
+	darray_append_items(*v, dir->name, dir->name_len);
+	darray_append(*v, '/');
+}
+
+static char *full_path_of_dir(struct dir const *dir, darray_char *v)
+{
+	darray_reset(*v);
+	_full_path_of_dir(dir, v);
+	return darray_get_cstring(*v);
+}
+
+static char *full_path_of_file(struct dir const *dir,
+		char const *name, size_t name_len, darray_char *v)
+{
+	darray_reset(*v);
+	_full_path_of_dir(dir, v);
+	darray_append_items(*v, name, name_len);
+	return darray_get_cstring(*v);
+}
+
+static char *full_path_of_entry(struct dir const *dir, struct dirent *d,
+		darray_char *v)
+{
+	return full_path_of_file(dir, d->d_name, dirent_name_len(d), v);
+}
+
+static void _rel_path_of_dir(struct dir const *dir, darray_char *v)
+{
+	if (dir->parent) {
+		_rel_path_of_dir(dir->parent, v);
+		darray_append_items(*v, dir->name, dir->name_len);
+		darray_append(*v, '/');
+	}
+}
+
+static char *rel_path_of_dir(struct dir *dir, darray_char *v)
+{
+	darray_reset(*v);
+	_rel_path_of_dir(dir, v);
+	return darray_get_cstring(*v);
+}
+
+static char *rel_path_of_file(struct dir *dir, char const *name,
+		size_t name_len, darray_char *v)
+{
+	darray_reset(*v);
+	_rel_path_of_dir(dir, v);
+	darray_append_items(*v, name, name_len);
+	return darray_get_cstring(*v);
 }
 
 static void *sp_index_daemon(void *varg)
 {
 	struct sync_path *sp = varg;
 
-	/* FIXME: this will break if the sync dir contains multiple filesystems. */
-	size_t len = path_dirent_size(sp->dir_path);
+	/* FIXME: this will break if the sync dir contains multiple
+	 * filesystems. */
+	size_t len = path_dirent_size(sp->root->name);
 
 	struct dirent *d = malloc(len);
-	struct vec v = VEC_INIT();
+	darray_char v = darray_new();
 	for (;;) {
 		struct dir *dir = wait_for_dir_to_scan(sp);
-		struct dirent *result;
-		int r = readdir_r(dir->dir, d, &result);
-		if (r) {
-			fprintf(stderr, "readdir_r() failed: %s\n", strerror(errno));
-			retry_dir_scan(sp, dir);
-			continue;
-		}
+		for (;;) {
+			fprintf(stderr, "scanning: %s\n",
+					full_path_of_dir(dir, &v));
+			struct dirent *result;
+			int r = readdir_r(dir->dir, d, &result);
+			if (r) {
+				fprintf(stderr, "readdir_r() failed: %s\n",
+						strerror(errno));
+				retry_dir_scan(sp, dir);
+				continue;
+			}
 
-		if (!result)
-			/* done with this dir */
-			break;
+			if (!result)
+				/* done with this dir */
+				break;
 
-		/* TODO: add option to avoid leaving the current filesystem
-		 * (ie: "only one fs") */
+			/* TODO: add option to avoid leaving the current filesystem
+			 * (ie: "only one fs") */
+			char *it = full_path_of_entry(dir, d, &v);
 
-		if (d->d_type == DT_DIR) {
-			struct dir *child = dir_create_exact(d->d_name, dirent_name_len(d), dir);
-			scan_this_dir(sp, child);
-		}
+			if (d->d_type == DT_DIR) {
+				size_t name_len = dirent_name_len(d);
+				if ((name_len == 1 && d->d_name[0] == '.') ||
+						(name_len == 2 && (d->d_name [0] == '.'
+							&& d->d_name[1] == '.'))) {
+					fprintf(stderr, "skipping: %s\n", it);
+					continue;
+				}
+				struct dir *child = dir_create(it, darray_size(v), dir);
+				scan_this_dir(sp, child);
+				fprintf(stderr, "queuing dir: %s\n", it);
+			}
 
-		/* add notifiers */
-		int wd = inotify_add_watch(sp->inotify_fd, full_path_of_entry(dir, d, &v),
-				IN_ATTRIB | IN_CREATE | IN_DELETE |
-				IN_DELETE_SELF | IN_MODIFY | IN_MOVE_SELF |
-				IN_MOVED_FROM | IN_MOVED_TO | IN_DONT_FOLLOW |
-				IN_EXCL_UNLINK);
-		if (wd == -1) {
-			fprintf(stderr, "inotify_add_watch failed: %s\n", strerror(errno));
-			continue;
+			/* add notifiers */
+			int wd = inotify_add_watch(sp->inotify_fd,
+					it,
+					IN_ATTRIB | IN_CREATE | IN_DELETE |
+					IN_DELETE_SELF | IN_MODIFY | IN_MOVE_SELF |
+					IN_MOVED_FROM | IN_MOVED_TO | IN_DONT_FOLLOW |
+					IN_EXCL_UNLINK);
+			if (wd == -1) {
+				fprintf(stderr, "inotify_add_watch failed on \"%s\": %s\n", it,
+						strerror(errno));
+				continue;
+			}
 		}
 
 	}
@@ -162,15 +217,15 @@ static void *sp_index_daemon(void *varg)
 	return NULL;
 }
 
-int sp_open(struct sync_path *sp, char const *path)
+int sp_open(struct sync_path *sp,
+		sp_on_added_file on_added_file,
+		sp_on_event on_event, char const *path)
 {
 	*sp = (typeof(*sp)) {
-		.dir_path = path,
-		.dir_path_len = strlen(path),
-
 		.to_scan = LIST_HEAD_INIT(sp->to_scan),
-		.to_scan_cond = PTHREAD_COND_INITIALIZER,
-		.to_scan_lock = PTHREAD_MUTEX_INITIALIZER,
+
+		.on_event = on_event,
+		.on_added_file = on_added_file,
 	};
 
 	tommy_hashlin_init(&sp->entries);
@@ -187,21 +242,15 @@ int sp_open(struct sync_path *sp, char const *path)
 		return -2;
 
 	/* enqueue base dir in to_scan */
-	sp->root = dir_create_exact(sp->dir_path, sp->dir_path_len, NULL);
+	sp->root = dir_create(path, strlen(path), NULL);
 	if (!sp->root)
 		return -3;
 	scan_this_dir(sp, sp->root);
-
-	/* should we spawn a thread to handle the scanning of the directory? I
-	 * think so */
-	int r = pthread_create(&sp->io_th, NULL, sp_index_daemon, sp);
-	if (r)
-		return r;
-
 	return 0;
 }
 
-int sp_wait_for_event(struct sync_path *sp, struct sp_event *ev)
+int sp_process(struct sync_path *sp)
 {
-	return -EINVAL;
+	sp_index_daemon(sp);
+	return 0;
 }

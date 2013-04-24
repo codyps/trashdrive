@@ -18,10 +18,15 @@ struct dir {
 	char name[];
 };
 
-struct sync_path {
-	char const *dir_path;
-	size_t dir_path_len;
+struct sync_path;
+typedef void (*sp_on_added_file)(struct sync_path *sp,
+		struct dir const *parent,
+		char const *name);
+typedef void (*sp_on_event)(struct sync_path *sp,
+		struct dir const *parent,
+		char const *name);
 
+struct sync_path {
 	struct dir *root;
 
 	int inotify_fd;
@@ -37,12 +42,10 @@ struct sync_path {
 	pthread_mutex_t  to_scan_lock;
 	pthread_cond_t   to_scan_cond;
 
+	/* callbacks */
+	sp_on_added_file on_added_file;
+	sp_on_event on_event;
 };
-
-struct sp_event {
-	char msg[256];
-};
-
 
 /* Options for async api:
  * types:
@@ -73,6 +76,8 @@ struct sp_event {
  *   - have callbacks execute in a seperate thread, spawn a thread per object.
  */
 
-int sp_wait_for_event(struct sync_path *sp, struct sp_event *ev);
-int sp_open(struct sync_path *sp, char const *path);
+int sp_open(struct sync_path *sp, sp_on_added_file oaf, sp_on_event oe, char const *path);
+
+/* blocks forever */
+int sp_process(struct sync_path *sp);
 #endif
