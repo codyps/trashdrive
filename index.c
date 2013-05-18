@@ -32,8 +32,13 @@ int main(int argc, char **argv)
 		usage(argc?argv[0]:"index");
 	}
 
-	struct sync_path sp;
-	int r = sp_open(&sp, on_added_file, on_event, argv[1]);
+	struct sync_path sp = {
+		.cb = {
+			.on_added_file = on_added_file,
+			.on_event = on_event,
+		},
+	};
+	int r = sp_open(&sp, argv[1]);
 	if (r) {
 		fprintf(stderr, "could not open path \"%s\": %s\n", argv[1], strerror(errno));
 		return 1;

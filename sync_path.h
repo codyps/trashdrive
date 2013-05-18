@@ -4,8 +4,8 @@
 #include <sys/types.h>
 #include <dirent.h>
 
-#include "ccan/list/list.h"
-#include "tommyds/tommy.h"
+#include <ccan/list/list.h>
+#include <tommyds/tommy.h>
 
 struct dir {
 	struct dir *parent;
@@ -19,12 +19,14 @@ struct dir {
 };
 
 struct sync_path;
-typedef void (*sp_on_added_file)(struct sync_path *sp,
+struct sync_path_cb {
+	void (*on_added_file)(struct sync_path *sp,
 		struct dir const *parent,
 		char const *name);
-typedef void (*sp_on_event)(struct sync_path *sp,
+	void (*on_event)(struct sync_path *sp,
 		struct dir const *parent,
 		char const *name);
+};
 
 struct sync_path {
 	struct dir *root;
@@ -39,12 +41,8 @@ struct sync_path {
 	/* elements are <something that refers to directories> that need to be
 	 * scanned for new watches. */
 	struct list_head to_scan;
-	pthread_mutex_t  to_scan_lock;
-	pthread_cond_t   to_scan_cond;
 
-	/* callbacks */
-	sp_on_added_file on_added_file;
-	sp_on_event on_event;
+	struct sync_path_cb cb;
 };
 
 /* Options for async api:
@@ -76,7 +74,7 @@ struct sync_path {
  *   - have callbacks execute in a seperate thread, spawn a thread per object.
  */
 
-int sp_open(struct sync_path *sp, sp_on_added_file oaf, sp_on_event oe, char const *path);
+int sp_open(struct sync_path *sp, char const *path);
 
 /* blocks forever */
 int sp_process(struct sync_path *sp);

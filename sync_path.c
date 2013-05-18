@@ -40,34 +40,24 @@ static size_t dir_full_path_length(struct dir *parent)
 	return s;
 }
 
-static void scan_this_dir(struct sync_path *sp, struct dir *d)
+static void queue_dir_for_scan(struct sync_path *sp, struct dir *d)
 {
-	pthread_mutex_lock(&sp->to_scan_lock);
 	list_add_tail(&sp->to_scan, &d->to_scan_entry);
-	pthread_cond_signal(&sp->to_scan_cond);
-	pthread_mutex_unlock(&sp->to_scan_lock);
 }
 
 static void retry_dir_scan(struct sync_path *sp, struct dir *d)
 {
-	scan_this_dir(sp, d);
+	queue_dir_for_scan(sp, d);
 }
 
 static struct dir *wait_for_dir_to_scan(struct sync_path *sp)
 {
-	int rc = 0;
-	struct dir *d;
-	pthread_mutex_lock(&sp->to_scan_lock);
-	while (list_empty(&sp->to_scan) && rc == 0)
-		rc = pthread_cond_wait(&sp->to_scan_cond, &sp->to_scan_lock);
-	d = list_pop(&sp->to_scan, typeof(*d), to_scan_entry);
-	pthread_mutex_unlock(&sp->to_scan_lock);
-	return d;
+	return list_pop(&sp->to_scan, struct dir, to_scan_entry);
 }
 
-static struct dir *dir_create(char const *path, size_t path_len, struct dir *parent)
+static struct dir *dir_create(char const *path, struct dir *parent, char const *name, size_t name_len)
 {
-	struct dir *d = malloc(offsetof(struct dir, name) + path_len + 1);
+	struct dir *d = malloc(offsetof(struct dir, name) + name_len + 1);
 
 	d->dir = opendir(path);
 	if (!d) {
@@ -76,8 +66,9 @@ static struct dir *dir_create(char const *path, size_t path_len, struct dir *par
 	}
 
 	d->parent = parent;
-	d->name_len = path_len;
-	memcpy(d->name, path, path_len + 1);
+	d->name_len = name_len;
+	memcpy(d->name, name, name_len);
+	d->name[name_len] = '\0';
 	return d;
 }
 
@@ -125,6 +116,8 @@ static char *full_path_of_file(struct dir const *dir,
 static char *full_path_of_entry(struct dir const *dir, struct dirent *d,
 		darray_char *v)
 {
+	printf("FPOE: dir=%.*s dirent=%.*s\n",
+			dir->name_len, dir->name, dirent_name_len(d), d->d_name);
 	return full_path_of_file(dir, d->d_name, dirent_name_len(d), v);
 }
 
@@ -153,9 +146,35 @@ static char *rel_path_of_file(struct dir *dir, char const *name,
 	return darray_get_cstring(*v);
 }
 
-static void *sp_index_daemon(void *varg)
+int sp_open(struct sync_path *sp, char const *path)
 {
-	struct sync_path *sp = varg;
+	*sp = (typeof(*sp)) {
+		.to_scan = LIST_HEAD_INIT(sp->to_scan),
+	};
+
+	tommy_hashlin_init(&sp->entries);
+
+#if 0
+	if (!access(path, R_OK)) {
+		fprintf(stderr, "could not access the sync_path: \"%s\"\n", path);
+		return -1;
+	}
+#endif
+
+	sp->inotify_fd = inotify_init();
+	if (sp->inotify_fd < 0)
+		return -2;
+
+	/* enqueue base dir in to_scan */
+	sp->root = dir_create(path, NULL, path, strlen(path));
+	if (!sp->root)
+		return -3;
+	queue_dir_for_scan(sp, sp->root);
+	return 0;
+}
+
+int sp_process(struct sync_path *sp)
+{
 
 	/* FIXME: this will break if the sync dir contains multiple
 	 * filesystems. */
@@ -165,9 +184,12 @@ static void *sp_index_daemon(void *varg)
 	darray_char v = darray_new();
 	for (;;) {
 		struct dir *dir = wait_for_dir_to_scan(sp);
+		if (!dir)
+			goto out;
 		for (;;) {
-			fprintf(stderr, "scanning: %s\n",
-					full_path_of_dir(dir, &v));
+			fprintf(stderr, "scanning: %s %p\n",
+					full_path_of_dir(dir, &v),
+					dir);
 			struct dirent *result;
 			int r = readdir_r(dir->dir, d, &result);
 			if (r) {
@@ -185,6 +207,7 @@ static void *sp_index_daemon(void *varg)
 			 * (ie: "only one fs") */
 			char *it = full_path_of_entry(dir, d, &v);
 
+			printf("fp = %s\n", it);
 			if (d->d_type == DT_DIR) {
 				size_t name_len = dirent_name_len(d);
 				if ((name_len == 1 && d->d_name[0] == '.') ||
@@ -193,9 +216,12 @@ static void *sp_index_daemon(void *varg)
 					fprintf(stderr, "skipping: %s\n", it);
 					continue;
 				}
-				struct dir *child = dir_create(it, darray_size(v), dir);
-				scan_this_dir(sp, child);
+				struct dir *child = dir_create(it,
+						dir,
+						d->d_name,
+						name_len);
 				fprintf(stderr, "queuing dir: %s\n", it);
+				queue_dir_for_scan(sp, child);
 			}
 
 			/* add notifiers */
@@ -214,43 +240,8 @@ static void *sp_index_daemon(void *varg)
 
 	}
 
-	return NULL;
-}
-
-int sp_open(struct sync_path *sp,
-		sp_on_added_file on_added_file,
-		sp_on_event on_event, char const *path)
-{
-	*sp = (typeof(*sp)) {
-		.to_scan = LIST_HEAD_INIT(sp->to_scan),
-
-		.on_event = on_event,
-		.on_added_file = on_added_file,
-	};
-
-	tommy_hashlin_init(&sp->entries);
-
-#if 0
-	if (!access(path, R_OK)) {
-		fprintf(stderr, "could not access the sync_path: \"%s\"\n", path);
-		return -1;
-	}
-#endif
-
-	sp->inotify_fd = inotify_init();
-	if (sp->inotify_fd < 0)
-		return -2;
-
-	/* enqueue base dir in to_scan */
-	sp->root = dir_create(path, strlen(path), NULL);
-	if (!sp->root)
-		return -3;
-	scan_this_dir(sp, sp->root);
-	return 0;
-}
-
-int sp_process(struct sync_path *sp)
-{
-	sp_index_daemon(sp);
+out:
+	darray_free(v);
+	free(d);
 	return 0;
 }
