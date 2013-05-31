@@ -12,6 +12,7 @@
 #include "sync_path.h"
 
 #include <ccan/darray/darray.h>
+#include <ccan/err/err.h>
 
 #if 0
 #include <linux/fanotify.h>
@@ -220,6 +221,8 @@ int sp_process(struct sync_path *sp)
 						dir,
 						d->d_name,
 						name_len);
+				if (!child)
+					err(1, "failed to allocate child\n");
 				fprintf(stderr, "queuing dir: %s\n", it);
 				queue_dir_for_scan(sp, child);
 			}
@@ -244,4 +247,10 @@ out:
 	darray_free(v);
 	free(d);
 	return 0;
+}
+
+int sp_process_inotify_fd(sync_path *sp)
+{
+	/* sp->inotify_fd is read to read, grab events from it an process them */
+
 }

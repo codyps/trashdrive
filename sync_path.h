@@ -76,6 +76,9 @@ struct sync_path {
 
 int sp_open(struct sync_path *sp, char const *path);
 
-/* blocks forever */
+/* returns as soon as all queued work is processed */
 int sp_process(struct sync_path *sp);
+
+/* reads events from the inotify fd and queues work, then processes it */
+int sp_process_inotify_fd(struct sync_path *sp);
 #endif

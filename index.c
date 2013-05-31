@@ -40,10 +40,29 @@ int main(int argc, char **argv)
 	};
 	int r = sp_open(&sp, argv[1]);
 	if (r) {
-		fprintf(stderr, "could not open path \"%s\": %s\n", argv[1], strerror(errno));
+		fprintf(stderr, "could not open path \"%s\": %s\n",
+				argv[1], strerror(errno));
 		return 1;
 	}
 
 	sp_process(&sp);
+
+	struct pollfd pfd[1] = {
+		{
+			.fd = sp->inotify_fd,
+			.events = POLLIN,
+		}
+	};
+
+	for (;;) {
+		int r = poll(pfd, ARRAY_SIZE(pfd), -1);
+		if (r != 1) {
+			warn("poll returned with no fd.");
+			continue;
+		}
+
+		sp_process_inotify_fd(&sp);
+	}
+
 	return 0;
 }
