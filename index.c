@@ -2,7 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <poll.h>
 #include <errno.h>
+
+#include <ccan/array_size/array_size.h>
+#include <ccan/err/err.h>
 
 #include "sync_path.h"
 
@@ -49,13 +53,13 @@ int main(int argc, char **argv)
 
 	struct pollfd pfd[1] = {
 		{
-			.fd = sp->inotify_fd,
+			.fd = sp.inotify_fd,
 			.events = POLLIN,
 		}
 	};
 
 	for (;;) {
-		int r = poll(pfd, ARRAY_SIZE(pfd), -1);
+		r = poll(pfd, ARRAY_SIZE(pfd), -1);
 		if (r != 1) {
 			warn("poll returned with no fd.");
 			continue;

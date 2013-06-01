@@ -249,7 +249,7 @@ out:
 	return 0;
 }
 
-int sp_process_inotify_fd(sync_path *sp)
+int sp_process_inotify_fd(struct sync_path *sp)
 {
 	/* sp->inotify_fd is read to read, grab events from it an process them */
 
