@@ -1,15 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
 
-#include "block_list.h"
-#include "penny/penny.h"
+#include <penny/penny.h>
+#include <penny/debug.h>
 
 #include "sync_path.h"
+#include "block_list.h"
 
 #include <ccan/darray/darray.h>
 #include <ccan/err/err.h>
@@ -51,7 +53,7 @@ static void retry_dir_scan(struct sync_path *sp, struct dir *d)
 	queue_dir_for_scan(sp, d);
 }
 
-static struct dir *wait_for_dir_to_scan(struct sync_path *sp)
+static struct dir *get_next_dir_to_scan(struct sync_path *sp)
 {
 	return list_pop(&sp->to_scan, struct dir, to_scan_entry);
 }
@@ -117,7 +119,7 @@ static char *full_path_of_file(struct dir const *dir,
 static char *full_path_of_entry(struct dir const *dir, struct dirent *d,
 		darray_char *v)
 {
-	printf("FPOE: dir=%.*s dirent=%.*s\n",
+	pr_debug(4, "FPOE: dir=%.*s dirent=%.*s",
 			dir->name_len, dir->name, dirent_name_len(d), d->d_name);
 	return full_path_of_file(dir, d->d_name, dirent_name_len(d), v);
 }
@@ -184,7 +186,7 @@ int sp_process(struct sync_path *sp)
 	struct dirent *d = malloc(len);
 	darray_char v = darray_new();
 	for (;;) {
-		struct dir *dir = wait_for_dir_to_scan(sp);
+		struct dir *dir = get_next_dir_to_scan(sp);
 		if (!dir)
 			goto out;
 		for (;;) {
@@ -228,6 +230,7 @@ int sp_process(struct sync_path *sp)
 			}
 
 			/* add notifiers */
+			pr_debug(3, "Adding watch on %s", it);
 			int wd = inotify_add_watch(sp->inotify_fd,
 					it,
 					IN_ATTRIB | IN_CREATE | IN_DELETE |
@@ -249,8 +252,22 @@ out:
 	return 0;
 }
 
+static void print_inotify_event(struct inotify_event *i, FILE *f)
+{
+	fprintf(f,"(struct inotify_event){ .wd = %d, .mask = %"PRIu32", .cookie = %"PRIu32", .len = %"PRIu32", .name = %p }", i->wd, i->mask, i->cookie, i->len, i->name);
+}
+
 int sp_process_inotify_fd(struct sync_path *sp)
 {
 	/* sp->inotify_fd is read to read, grab events from it an process them */
+	char buf[4096];
+	ssize_t r = read(sp->inotify_fd, buf, sizeof(buf));
 
+	printf("got %zd bytes.\n", r);
+
+	struct inotify_event *e = (struct inotify_event *)buf;
+	print_inotify_event(e, stdout);
+	putchar('\n');
+
+	return 0;
 }

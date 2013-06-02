@@ -65,6 +65,8 @@ int main(int argc, char **argv)
 			continue;
 		}
 
+		printf("POLL\n");
+
 		sp_process_inotify_fd(&sp);
 	}
 
