@@ -234,8 +234,9 @@ int sp_process(struct sync_path *sp)
 			int wd = inotify_add_watch(sp->inotify_fd,
 					it,
 					IN_ATTRIB | IN_CREATE | IN_DELETE |
-					IN_DELETE_SELF | IN_MODIFY | IN_MOVE_SELF |
-					IN_MOVED_FROM | IN_MOVED_TO | IN_DONT_FOLLOW |
+					IN_DELETE_SELF | IN_MODIFY |
+					IN_MOVE_SELF |
+					IN_MOVED_FROM | IN_MOVED_TO |
 					IN_EXCL_UNLINK);
 			if (wd == -1) {
 				fprintf(stderr, "inotify_add_watch failed on \"%s\": %s\n", it,
