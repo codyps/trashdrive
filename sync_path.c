@@ -8,6 +8,7 @@
 #include <pthread.h>
 
 #include <penny/penny.h>
+#include <ccan/array_size/array_size.h>
 #include <ccan/pr_debug/pr_debug.h>
 
 #include "sync_path.h"
@@ -58,8 +59,9 @@ static struct dir *get_next_dir_to_scan(struct sync_path *sp)
 	return list_pop(&sp->to_scan, struct dir, to_scan_entry);
 }
 
-static struct dir *dir_create(char const *path, struct dir *parent, char const *name, size_t name_len)
+static struct dir *dir_create(struct sync_path *sp, char const *path, struct dir *parent, char const *name, size_t name_len)
 {
+	/* XXX: we'll probably need all this data for files too */
 	struct dir *d = malloc(offsetof(struct dir, name) + name_len + 1);
 	if (!d)
 		return NULL;
@@ -74,6 +76,16 @@ static struct dir *dir_create(char const *path, struct dir *parent, char const *
 	d->name_len = name_len;
 	memcpy(d->name, name, name_len);
 	d->name[name_len] = '\0';
+
+	/* add notifiers */
+	pr_debug(3, "Adding watch on %s", path);
+	int wd = inotify_add_watch(sp->inotify_fd,
+			path, IN_ALL_EVENTS | IN_EXCL_UNLINK);
+	if (wd == -1) {
+		fprintf(stderr, "inotify_add_watch failed on \"%s\": %s\n", path,
+				strerror(errno));
+		/* TODO: mark the file so we know it is unwatched, but carry on */
+	}
 	return d;
 }
 
@@ -170,7 +182,7 @@ int sp_open(struct sync_path *sp, char const *path)
 		return -2;
 
 	/* enqueue base dir in to_scan */
-	sp->root = dir_create(path, NULL, path, strlen(path));
+	sp->root = dir_create(sp, path, NULL, path, strlen(path));
 	if (!sp->root)
 		return -3;
 	queue_dir_for_scan(sp, sp->root);
@@ -179,7 +191,6 @@ int sp_open(struct sync_path *sp, char const *path)
 
 int sp_process(struct sync_path *sp)
 {
-
 	/* FIXME: this will break if the sync dir contains multiple
 	 * filesystems. */
 	size_t len = path_dirent_size(sp->root->name);
@@ -220,7 +231,8 @@ int sp_process(struct sync_path *sp)
 					fprintf(stderr, "skipping: %s\n", it);
 					continue;
 				}
-				struct dir *child = dir_create(it,
+				struct dir *child = dir_create(sp,
+						it,
 						dir,
 						d->d_name,
 						name_len);
@@ -230,20 +242,6 @@ int sp_process(struct sync_path *sp)
 				queue_dir_for_scan(sp, child);
 			}
 
-			/* add notifiers */
-			pr_debug(3, "Adding watch on %s", it);
-			int wd = inotify_add_watch(sp->inotify_fd,
-					it,
-					IN_ATTRIB | IN_CREATE | IN_DELETE |
-					IN_DELETE_SELF | IN_MODIFY |
-					IN_MOVE_SELF |
-					IN_MOVED_FROM | IN_MOVED_TO |
-					IN_EXCL_UNLINK);
-			if (wd == -1) {
-				fprintf(stderr, "inotify_add_watch failed on \"%s\": %s\n", it,
-						strerror(errno));
-				continue;
-			}
 		}
 
 	}
@@ -254,9 +252,62 @@ out:
 	return 0;
 }
 
+struct flag {
+	uintmax_t mask;
+	const char *name;
+};
+
+#define FLAG(m) { .mask = m, .name = #m }
+
+static struct flag inotify_flags[] = {
+	FLAG(IN_ACCESS),
+	FLAG(IN_MODIFY),
+	FLAG(IN_ATTRIB),
+	FLAG(IN_CLOSE_WRITE),
+	FLAG(IN_CLOSE_NOWRITE),
+	FLAG(IN_OPEN),
+	FLAG(IN_MOVED_FROM),
+	FLAG(IN_MOVED_TO),
+	FLAG(IN_CREATE),
+	FLAG(IN_DELETE),
+	FLAG(IN_DELETE_SELF),
+	FLAG(IN_MOVE_SELF),
+	FLAG(IN_UNMOUNT),
+	FLAG(IN_Q_OVERFLOW),
+	FLAG(IN_IGNORED),
+};
+
+static void print_flags(struct flag flags[], size_t flag_ct, uintmax_t v, FILE *o)
+{
+	size_t i;
+	bool started = false;
+	uintmax_t used = 0;
+	for (i = 0; i < flag_ct; i++) {
+		if (v & flags[i].mask) {
+			if (started) {
+				fprintf(o, "|%s", flags[i].name);
+			} else {
+				started = true;
+				fprintf(o, "%s", flags[i].name);
+			}
+			used |= flags[i].mask;
+		}
+	}
+
+	uintmax_t rem = (~used) & v;
+	if (rem) {
+		if (started)
+			fprintf(o, "|%#" PRIxMAX, rem);
+		else
+			fprintf(o, "%#" PRIxMAX, rem);
+	}
+}
+
 static void print_inotify_event(struct inotify_event *i, FILE *f)
 {
-	fprintf(f,"(struct inotify_event){ .wd = %d, .mask = %"PRIu32", .cookie = %"PRIu32", .len = %"PRIu32", .name = %p }", i->wd, i->mask, i->cookie, i->len, i->name);
+	fprintf(f, "(struct inotify_event){ .wd = %d, .mask = ", i->wd);
+	print_flags(inotify_flags, ARRAY_SIZE(inotify_flags), i->mask, f);
+	fprintf(f, "/* %#"PRIx32" */, .cookie = %#"PRIx32", .len = %"PRIu32", .name = %p }", i->mask, i->cookie, i->len, i->name);
 }
 
 int sp_process_inotify_fd(struct sync_path *sp)
