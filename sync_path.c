@@ -259,7 +259,10 @@ struct flag {
 
 #define FLAG(m) { .mask = m, .name = #m }
 
+/* TODO: currently only works with set/unset flags. Make it so we can define
+ * mask fields with values like perf. */
 static struct flag inotify_flags[] = {
+	/* Individual flags */
 	FLAG(IN_ACCESS),
 	FLAG(IN_MODIFY),
 	FLAG(IN_ATTRIB),
@@ -275,6 +278,12 @@ static struct flag inotify_flags[] = {
 	FLAG(IN_UNMOUNT),
 	FLAG(IN_Q_OVERFLOW),
 	FLAG(IN_IGNORED),
+	FLAG(IN_ONLYDIR),
+	FLAG(IN_DONT_FOLLOW),
+	FLAG(IN_EXCL_UNLINK),
+	FLAG(IN_MASK_ADD),
+	FLAG(IN_ISDIR),
+	FLAG(IN_ONESHOT),
 };
 
 static void print_flags(struct flag flags[], size_t flag_ct, uintmax_t v, FILE *o)
@@ -283,7 +292,7 @@ static void print_flags(struct flag flags[], size_t flag_ct, uintmax_t v, FILE *
 	bool started = false;
 	uintmax_t used = 0;
 	for (i = 0; i < flag_ct; i++) {
-		if (v & flags[i].mask) {
+		if ((v & flags[i].mask & ~used) == flags[i].mask) {
 			if (started) {
 				fprintf(o, "|%s", flags[i].name);
 			} else {
