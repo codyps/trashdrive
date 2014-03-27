@@ -8,7 +8,7 @@
 #include <pthread.h>
 
 #include <penny/penny.h>
-#include <penny/debug.h>
+#include <ccan/pr_debug/pr_debug.h>
 
 #include "sync_path.h"
 #include "block_list.h"
@@ -61,9 +61,11 @@ static struct dir *get_next_dir_to_scan(struct sync_path *sp)
 static struct dir *dir_create(char const *path, struct dir *parent, char const *name, size_t name_len)
 {
 	struct dir *d = malloc(offsetof(struct dir, name) + name_len + 1);
+	if (!d)
+		return NULL;
 
 	d->dir = opendir(path);
-	if (!d) {
+	if (!d->dir) {
 		free(d);
 		return NULL;
 	}
@@ -86,7 +88,6 @@ static size_t dirent_name_len(struct dirent *d)
 	return strlen(d->d_name);
 }
 
-#define darray_reset(arr) do { (arr).size = 0; } while(0)
 #define darray_nullterminate(arr) darray_append(arr, '\0')
 #define darray_get(arr) ((arr).item)
 #define darray_get_cstring(arr) ({ darray_append(arr, '\0'); (arr).item; })
@@ -120,7 +121,7 @@ static char *full_path_of_entry(struct dir const *dir, struct dirent *d,
 		darray_char *v)
 {
 	pr_debug(4, "FPOE: dir=%.*s dirent=%.*s",
-			dir->name_len, dir->name, dirent_name_len(d), d->d_name);
+			(int)dir->name_len, dir->name, (int)dirent_name_len(d), d->d_name);
 	return full_path_of_file(dir, d->d_name, dirent_name_len(d), v);
 }
 
