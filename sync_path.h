@@ -11,6 +11,8 @@ struct dir {
 	struct dir *parent;
 	DIR *dir;
 
+	int wd;
+	tommy_node wd_map;
 	struct list_node to_scan_entry;
 
 	/* both are relative to the parent */
@@ -32,11 +34,7 @@ struct sync_path {
 	struct dir *root;
 
 	int inotify_fd;
-
-	tommy_hashlin entries;
-	tommy_hashlin wd_to_path;
-
-	pthread_t io_th;
+	tommy_hashlin wd_to_dir;
 
 	/* elements are <something that refers to directories> that need to be
 	 * scanned for new watches. */

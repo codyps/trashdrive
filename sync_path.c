@@ -8,14 +8,17 @@
 #include <pthread.h>
 
 #include <penny/penny.h>
+
 #include <ccan/array_size/array_size.h>
 #include <ccan/pr_debug/pr_debug.h>
+#include <ccan/darray/darray.h>
+#include <ccan/err/err.h>
+
+#include <tommyds/tommyhashlin.h>
 
 #include "sync_path.h"
 #include "block_list.h"
 
-#include <ccan/darray/darray.h>
-#include <ccan/err/err.h>
 
 #if 0
 #include <linux/fanotify.h>
@@ -61,11 +64,19 @@ static struct dir *get_next_dir_to_scan(struct sync_path *sp)
 
 static struct dir *dir_create(struct sync_path *sp, char const *path, struct dir *parent, char const *name, size_t name_len)
 {
-	/* XXX: we'll probably need all this data for files too */
+	/* we don't need all this data for files: by watching directories, we
+	 * get events on all files they contain, indicated by wd + a filename.
+	 *
+	 * We will probably need some data on files (dirty, when dirtied,
+	 * closed since dirtied, when closed) to make choices about when to
+	 * syncronize them.
+	 */
 	struct dir *d = malloc(offsetof(struct dir, name) + name_len + 1);
 	if (!d)
 		return NULL;
 
+	/* XXX: We're using full paths instead of openat() to create
+	 * directories. Will this create/solve any race issues? */
 	d->dir = opendir(path);
 	if (!d->dir) {
 		free(d);
@@ -81,11 +92,11 @@ static struct dir *dir_create(struct sync_path *sp, char const *path, struct dir
 	pr_debug(3, "Adding watch on %s", path);
 	int wd = inotify_add_watch(sp->inotify_fd,
 			path, IN_ALL_EVENTS | IN_EXCL_UNLINK);
-	if (wd == -1) {
+	if (wd == -1)
 		fprintf(stderr, "inotify_add_watch failed on \"%s\": %s\n", path,
 				strerror(errno));
-		/* TODO: mark the file so we know it is unwatched, but carry on */
-	}
+	d->wd = wd;
+	tommy_hashlin_insert(&sp->wd_to_dir, &d->wd_map, &d, tommy_inthash_u32(wd));
 	return d;
 }
 
@@ -162,13 +173,20 @@ static char *rel_path_of_file(struct dir *dir, char const *name,
 	return darray_get_cstring(*v);
 }
 
+static struct dir *dir_create_under_dir(struct sync_path *sp, struct dir *parent, char const *name, size_t name_len)
+{
+	darray_char v = darray_new();
+	char *path = rel_path_of_file(parent, name, name_len, &v);
+	return dir_create(sp, path, parent, name, name_len);
+}
+
 int sp_open(struct sync_path *sp, char const *path)
 {
 	*sp = (typeof(*sp)) {
 		.to_scan = LIST_HEAD_INIT(sp->to_scan),
 	};
 
-	tommy_hashlin_init(&sp->entries);
+	tommy_hashlin_init(&sp->wd_to_dir);
 
 #if 0
 	if (!access(path, R_OK)) {
@@ -187,6 +205,22 @@ int sp_open(struct sync_path *sp, char const *path)
 		return -3;
 	queue_dir_for_scan(sp, sp->root);
 	return 0;
+}
+
+static int compare_wd_to_dir(const void *w_, const void *dir_)
+{
+	const struct dir *dir = dir_;
+	int w = (uintptr_t)w_;
+	return w != dir->wd;
+}
+
+static struct dir *wd_to_dir(struct sync_path *sp, int wd)
+{
+	struct dir *dir = tommy_hashlin_search(&sp->wd_to_dir,
+					compare_wd_to_dir,
+					(const void *)(uintptr_t)wd,
+					tommy_inthash_u32(wd));
+	return dir;
 }
 
 int sp_process(struct sync_path *sp)
@@ -330,6 +364,29 @@ int sp_process_inotify_fd(struct sync_path *sp)
 	struct inotify_event *e = (struct inotify_event *)buf;
 	print_inotify_event(e, stdout);
 	putchar('\n');
+
+	/* Action on a directory, we need to update our watches/queue someone for scanning */
+	if (e->mask & IN_ISDIR) {
+		switch (e->mask & ~IN_ISDIR) {
+		case IN_CREATE:
+		case IN_MOVED_TO:
+			printf("something got created\n");
+			/* inside of: */
+			struct dir *parent = wd_to_dir(sp, e->wd);
+			if (!parent) {
+				printf("unknown wd=%d\n", e->wd);
+				goto bad_event;
+			}
+			struct dir *dir = dir_create_under_dir(sp, parent, e->name, strlen(e->name));
+			if (!dir) {
+				printf("dir creation failed\n");
+				goto bad_event;
+			}
+
+			queue_dir_for_scan(sp, dir);
+		}
+	}
+bad_event:
 
 	return 0;
 }
