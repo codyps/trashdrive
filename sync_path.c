@@ -444,6 +444,8 @@ int sp_process_inotify_fd(struct sync_path *sp)
 		}
 
 bad_event:
+		/* these 2 lines place a bit of trust in the kernel interfaces
+		 * not to give us bad event buffers. Don't let us down. */
 		e = (void *)&e->name[e->len];
 		if (((char *)e - buf) >= r)
 			break;
