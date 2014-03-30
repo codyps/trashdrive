@@ -251,7 +251,8 @@ int sp_process(struct sync_path *sp)
 	for (;;) {
 		struct dir *dir = get_next_dir_to_scan(sp);
 		if (!dir)
-			goto out;
+			break;
+
 		fprintf(stderr, "scanning: %s (%s)\n",
 				full_path_of_dir(dir, &v),
 				rel_path_of_dir(dir, &v2));
@@ -295,7 +296,6 @@ int sp_process(struct sync_path *sp)
 
 	}
 
-out:
 	darray_free(v2);
 	darray_free(v);
 	free(d);
@@ -371,41 +371,80 @@ static void print_inotify_event(struct inotify_event *i, FILE *f)
 	fputs("\" }", f);
 }
 
+static struct dir *dir_child(struct dir *parent, char *name, size_t name_len)
+{
+	/* :( */
+	return NULL;
+}
+
+static void dir_mark_removed(struct dir *dir)
+{
+	/* TODO: mark the dir as removed and take appropriate action. We may or
+	 * may not want to remove all our tracking of it this moment. */
+}
+
 int sp_process_inotify_fd(struct sync_path *sp)
 {
 	/* sp->inotify_fd is read to read, grab events from it an process them */
 	char buf[4096];
+	darray_char v = darray_new();
 	ssize_t r = read(sp->inotify_fd, buf, sizeof(buf));
 
 	printf("got %zd bytes.\n", r);
 
-	struct inotify_event *e = (struct inotify_event *)buf;
-	print_inotify_event(e, stdout);
-	putchar('\n');
+	for (;;) {
+		struct inotify_event *e = (struct inotify_event *)buf;
+		print_inotify_event(e, stdout);
+		putchar('\n');
 
-	/* Action on a directory, we need to update our watches/queue someone for scanning */
-	if (e->mask & IN_ISDIR) {
-		switch (e->mask & ~IN_ISDIR) {
-		case IN_CREATE:
-		case IN_MOVED_TO: {
-			/* inside of: */
-			struct dir *parent = wd_to_dir(sp, e->wd);
-			if (!parent) {
-				printf("unknown wd=%d\n", e->wd);
-				goto bad_event;
-			}
-			struct dir *dir = dir_create_under_dir(sp, parent, e->name, strlen(e->name));
-			if (!dir) {
-				printf("dir creation failed\n");
-				goto bad_event;
-			}
+		/* Action on a directory, we need to update our watches/queue someone for scanning */
+		/* TODO: add some handling for MOVEs */
+		if (e->mask & IN_ISDIR) {
+			switch (e->mask & ~IN_ISDIR) {
+			case IN_CREATE:
+			case IN_MOVED_TO: {
+				/* inside of: */
+				struct dir *parent = wd_to_dir(sp, e->wd);
+				if (!parent) {
+					printf("unknown wd=%d\n", e->wd);
+					goto bad_event;
+				}
+				struct dir *dir = dir_create_under_dir(sp, parent, e->name, strlen(e->name));
+				if (!dir) {
+					printf("dir creation failed\n");
+					goto bad_event;
+				}
 
-			queue_dir_for_scan(sp, dir);
+				queue_dir_for_scan(sp, dir);
+				break;
+			}
+			case IN_DELETE:
+			case IN_MOVED_FROM: {
+				/* inside of: */
+				struct dir *parent = wd_to_dir(sp, e->wd);
+				if (!parent) {
+					printf("unknown wd=%d\n", e->wd);
+					goto bad_event;
+				}
+				struct dir *dir = dir_child(parent, e->name, strlen(e->name));
+				if (!dir) {
+					printf("could not find dir child %s\n",
+							full_path_of_file(parent, e->name, strlen(e->name), &v));
+					goto bad_event;
+				}
+
+				dir_mark_removed(dir);
+				break;
+			}
+			}
 		}
-		}
-	}
+
 bad_event:
-	;
+		e = (void *)&e->name[e->len];
+		if (((char *)e - buf) >= r)
+			break;
+	}
 
+	darray_free(v);
 	return 0;
 }
