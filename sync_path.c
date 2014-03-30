@@ -8,11 +8,13 @@
 #include <pthread.h>
 
 #include <penny/penny.h>
+#include <penny/print.h>
 
 #include <ccan/array_size/array_size.h>
 #include <ccan/pr_debug/pr_debug.h>
 #include <ccan/darray/darray.h>
 #include <ccan/err/err.h>
+#include <ccan/compiler/compiler.h>
 
 #include <tommyds/tommyhashlin.h>
 
@@ -31,12 +33,13 @@
 
 static size_t path_dirent_size(char const *path)
 {
-	size_t name_max = pathconf(path, _PC_NAME_MAX);
+	long name_max = pathconf(path, _PC_NAME_MAX);
 	if (name_max == -1)
 		name_max = 255;
 	return offsetof(struct dirent, d_name) + name_max + 1;
 }
 
+UNNEEDED
 static size_t dir_full_path_length(struct dir *parent)
 {
 	size_t s = 0;
@@ -47,8 +50,86 @@ static size_t dir_full_path_length(struct dir *parent)
 	return s;
 }
 
+#define darray_nullterminate(arr) darray_append(arr, '\0')
+#define darray_get(arr) ((arr).item)
+#define darray_get_cstring(arr) ({ darray_append(arr, '\0'); (arr).item; })
+
+/* appends to v */
+static void _full_path_of_dir(struct dir const *dir, darray_char *v)
+{
+	if (dir->parent)
+		_full_path_of_dir(dir->parent, v);
+	darray_append_items(*v, dir->name, dir->name_len);
+	darray_append(*v, '/');
+}
+
+static char *full_path_of_dir(struct dir const *dir, darray_char *v)
+{
+	darray_reset(*v);
+	_full_path_of_dir(dir, v);
+	return darray_get_cstring(*v);
+}
+
+static char *full_path_of_file(struct dir const *dir,
+		char const *name, size_t name_len, darray_char *v)
+{
+	darray_reset(*v);
+	_full_path_of_dir(dir, v);
+	darray_append_items(*v, name, name_len);
+	return darray_get_cstring(*v);
+}
+
+static size_t dirent_name_len(struct dirent *d)
+{
+	/* FIXME: not quite correct: while this will be valid, the name field
+	 * could be termintated early with a '\0', causing this to
+	 * overestimate.
+	 * TODO: Determine whether this is a problem.
+	 */
+	// return d->d_reclen - offsetof(struct dirent, d_name);
+	return strlen(d->d_name);
+}
+
+static char *full_path_of_entry(struct dir const *dir, struct dirent *d,
+		darray_char *v)
+{
+	pr_debug(4, "FPOE: dir=%.*s dirent=%.*s",
+			(int)dir->name_len, dir->name, (int)dirent_name_len(d), d->d_name);
+	return full_path_of_file(dir, d->d_name, dirent_name_len(d), v);
+}
+
+static void _rel_path_of_dir(struct dir const *dir, darray_char *v)
+{
+	if (dir->parent) {
+		_rel_path_of_dir(dir->parent, v);
+		darray_append_items(*v, dir->name, dir->name_len);
+		darray_append(*v, '/');
+	}
+}
+
+UNNEEDED
+static char *rel_path_of_dir(struct dir *dir, darray_char *v)
+{
+	darray_reset(*v);
+	_rel_path_of_dir(dir, v);
+	return darray_get_cstring(*v);
+}
+
+UNNEEDED
+static char *rel_path_of_file(struct dir *dir, char const *name,
+		size_t name_len, darray_char *v)
+{
+	darray_reset(*v);
+	_rel_path_of_dir(dir, v);
+	darray_append_items(*v, name, name_len);
+	return darray_get_cstring(*v);
+}
+
 static void queue_dir_for_scan(struct sync_path *sp, struct dir *d)
 {
+	darray_char v = darray_new();
+	printf("QUEUEING %s\n", full_path_of_dir(d, &v));
+	darray_free(v);
 	list_add_tail(&sp->to_scan, &d->to_scan_entry);
 }
 
@@ -91,93 +172,23 @@ static struct dir *dir_create(struct sync_path *sp, char const *path, struct dir
 	/* add notifiers */
 	pr_debug(3, "Adding watch on %s", path);
 	int wd = inotify_add_watch(sp->inotify_fd,
-			path, IN_ALL_EVENTS | IN_EXCL_UNLINK);
+			path, IN_ALL_EVENTS);
 	if (wd == -1)
 		fprintf(stderr, "inotify_add_watch failed on \"%s\": %s\n", path,
 				strerror(errno));
 	d->wd = wd;
-	tommy_hashlin_insert(&sp->wd_to_dir, &d->wd_map, &d, tommy_inthash_u32(wd));
+	tommy_hashlin_insert(&sp->wd_to_dir, &d->wd_map, d, tommy_inthash_u32(d->wd));
 	return d;
-}
-
-static size_t dirent_name_len(struct dirent *d)
-{
-	/* FIXME: not quite correct: while this will be valid, the name field
-	 * could be termintated early with a '\0', causing this to
-	 * overestimate.
-	 * TODO: Determine whether this is a problem.
-	 */
-	// return d->d_reclen - offsetof(struct dirent, d_name);
-	return strlen(d->d_name);
-}
-
-#define darray_nullterminate(arr) darray_append(arr, '\0')
-#define darray_get(arr) ((arr).item)
-#define darray_get_cstring(arr) ({ darray_append(arr, '\0'); (arr).item; })
-
-/* appends to v */
-static void _full_path_of_dir(struct dir const *dir, darray_char *v)
-{
-	if (dir->parent)
-		_full_path_of_dir(dir->parent, v);
-	darray_append_items(*v, dir->name, dir->name_len);
-	darray_append(*v, '/');
-}
-
-static char *full_path_of_dir(struct dir const *dir, darray_char *v)
-{
-	darray_reset(*v);
-	_full_path_of_dir(dir, v);
-	return darray_get_cstring(*v);
-}
-
-static char *full_path_of_file(struct dir const *dir,
-		char const *name, size_t name_len, darray_char *v)
-{
-	darray_reset(*v);
-	_full_path_of_dir(dir, v);
-	darray_append_items(*v, name, name_len);
-	return darray_get_cstring(*v);
-}
-
-static char *full_path_of_entry(struct dir const *dir, struct dirent *d,
-		darray_char *v)
-{
-	pr_debug(4, "FPOE: dir=%.*s dirent=%.*s",
-			(int)dir->name_len, dir->name, (int)dirent_name_len(d), d->d_name);
-	return full_path_of_file(dir, d->d_name, dirent_name_len(d), v);
-}
-
-static void _rel_path_of_dir(struct dir const *dir, darray_char *v)
-{
-	if (dir->parent) {
-		_rel_path_of_dir(dir->parent, v);
-		darray_append_items(*v, dir->name, dir->name_len);
-		darray_append(*v, '/');
-	}
-}
-
-static char *rel_path_of_dir(struct dir *dir, darray_char *v)
-{
-	darray_reset(*v);
-	_rel_path_of_dir(dir, v);
-	return darray_get_cstring(*v);
-}
-
-static char *rel_path_of_file(struct dir *dir, char const *name,
-		size_t name_len, darray_char *v)
-{
-	darray_reset(*v);
-	_rel_path_of_dir(dir, v);
-	darray_append_items(*v, name, name_len);
-	return darray_get_cstring(*v);
 }
 
 static struct dir *dir_create_under_dir(struct sync_path *sp, struct dir *parent, char const *name, size_t name_len)
 {
+	/* TODO: cache the darray_char inside sp */
 	darray_char v = darray_new();
-	char *path = rel_path_of_file(parent, name, name_len, &v);
-	return dir_create(sp, path, parent, name, name_len);
+	char *path = full_path_of_file(parent, name, name_len, &v);
+	struct dir *d = dir_create(sp, path, parent, name, name_len);
+	darray_free(v);
+	return d;
 }
 
 int sp_open(struct sync_path *sp, char const *path)
@@ -211,7 +222,9 @@ static int compare_wd_to_dir(const void *w_, const void *dir_)
 {
 	const struct dir *dir = dir_;
 	int w = (uintptr_t)w_;
-	return w != dir->wd;
+	/* XXX: tommy_hashlin_search() checks "== 0", we should be able to make
+	 * this less bad. */
+	return (w == dir->wd) ? 0 : 1;
 }
 
 static struct dir *wd_to_dir(struct sync_path *sp, int wd)
@@ -350,7 +363,9 @@ static void print_inotify_event(struct inotify_event *i, FILE *f)
 {
 	fprintf(f, "(struct inotify_event){ .wd = %d, .mask = ", i->wd);
 	print_flags(inotify_flags, ARRAY_SIZE(inotify_flags), i->mask, f);
-	fprintf(f, "/* %#"PRIx32" */, .cookie = %#"PRIx32", .len = %"PRIu32", .name = %p }", i->mask, i->cookie, i->len, i->name);
+	fprintf(f, "/* %#"PRIx32" */, .cookie = %#"PRIx32", .len = %"PRIu32", .name = \"", i->mask, i->cookie, i->len);
+	print_string_as_cstring_(i->name, i->len, f);
+	fputs("\" }", f);
 }
 
 int sp_process_inotify_fd(struct sync_path *sp)
@@ -369,8 +384,7 @@ int sp_process_inotify_fd(struct sync_path *sp)
 	if (e->mask & IN_ISDIR) {
 		switch (e->mask & ~IN_ISDIR) {
 		case IN_CREATE:
-		case IN_MOVED_TO:
-			printf("something got created\n");
+		case IN_MOVED_TO: {
 			/* inside of: */
 			struct dir *parent = wd_to_dir(sp, e->wd);
 			if (!parent) {
@@ -385,8 +399,10 @@ int sp_process_inotify_fd(struct sync_path *sp)
 
 			queue_dir_for_scan(sp, dir);
 		}
+		}
 	}
 bad_event:
+	;
 
 	return 0;
 }
