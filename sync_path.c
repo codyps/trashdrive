@@ -54,7 +54,10 @@ static size_t dir_full_path_length(struct dir *parent)
 #define darray_get(arr) ((arr).item)
 #define darray_get_cstring(arr) ({ darray_append(arr, '\0'); (arr).item; })
 
-/* appends to v */
+/*
+ * appends to v
+ * "full_path" = <dir_of_sync_path>/<rel_path>
+ */
 static void _full_path_of_dir(struct dir const *dir, darray_char *v)
 {
 	if (dir->parent)
@@ -98,6 +101,7 @@ static char *full_path_of_entry(struct dir const *dir, struct dirent *d,
 	return full_path_of_file(dir, d->d_name, dirent_name_len(d), v);
 }
 
+/* "rel_path" = path relative to the root of the sync dir */
 static void _rel_path_of_dir(struct dir const *dir, darray_char *v)
 {
 	if (dir->parent) {
@@ -244,14 +248,15 @@ int sp_process(struct sync_path *sp)
 
 	struct dirent *d = malloc(len);
 	darray_char v = darray_new();
+	darray_char v2 = darray_new();
 	for (;;) {
 		struct dir *dir = get_next_dir_to_scan(sp);
 		if (!dir)
 			goto out;
+		fprintf(stderr, "scanning: %s (%s)\n",
+				full_path_of_dir(dir, &v),
+				rel_path_of_dir(dir, &v2));
 		for (;;) {
-			fprintf(stderr, "scanning: %s %p\n",
-					full_path_of_dir(dir, &v),
-					dir);
 			struct dirent *result;
 			int r = readdir_r(dir->dir, d, &result);
 			if (r) {
@@ -269,13 +274,12 @@ int sp_process(struct sync_path *sp)
 			 * (ie: "only one fs") */
 			char *it = full_path_of_entry(dir, d, &v);
 
-			printf("fp = %s\n", it);
+			printf("  fp = \"%s\"\n", it);
 			if (d->d_type == DT_DIR) {
 				size_t name_len = dirent_name_len(d);
 				if ((name_len == 1 && d->d_name[0] == '.') ||
 						(name_len == 2 && (d->d_name [0] == '.'
 							&& d->d_name[1] == '.'))) {
-					fprintf(stderr, "skipping: %s\n", it);
 					continue;
 				}
 				struct dir *child = dir_create(sp,
@@ -285,7 +289,6 @@ int sp_process(struct sync_path *sp)
 						name_len);
 				if (!child)
 					err(1, "failed to allocate child\n");
-				fprintf(stderr, "queuing dir: %s\n", it);
 				queue_dir_for_scan(sp, child);
 			}
 
@@ -294,6 +297,7 @@ int sp_process(struct sync_path *sp)
 	}
 
 out:
+	darray_free(v2);
 	darray_free(v);
 	free(d);
 	return 0;

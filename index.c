@@ -64,9 +64,6 @@ int main(int argc, char **argv)
 			warn("poll returned with no fd.");
 			continue;
 		}
-
-		printf("POLL\n");
-
 		sp_process_inotify_fd(&sp);
 	}
 
