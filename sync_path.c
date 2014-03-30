@@ -389,11 +389,15 @@ int sp_process_inotify_fd(struct sync_path *sp)
 	char buf[4096];
 	darray_char v = darray_new();
 	ssize_t r = read(sp->inotify_fd, buf, sizeof(buf));
+	if (r < 0) {
+		printf("read error: %zd %s", r,  strerror(errno));
+		return r;
+	}
 
 	printf("got %zd bytes.\n", r);
 
+	struct inotify_event *e = (struct inotify_event *)buf;
 	for (;;) {
-		struct inotify_event *e = (struct inotify_event *)buf;
 		print_inotify_event(e, stdout);
 		putchar('\n');
 
