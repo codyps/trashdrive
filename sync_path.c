@@ -111,7 +111,6 @@ static void _rel_path_of_dir(struct dir const *dir, darray_char *v)
 	}
 }
 
-UNNEEDED
 static char *rel_path_of_dir(struct dir *dir, darray_char *v)
 {
 	darray_reset(*v);
