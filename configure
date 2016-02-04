@@ -1,0 +1,12 @@
+#! /bin/sh
+# ex: sts=8 sw=8 ts=8 noet
+set -eu -o pipefail
+
+#PKGCONFIG_LIBS=""
+LIB_CFLAGS="-Dtommy_inline=\"static inline\" -pthread -I. -Itommyds -Iccan"
+LIB_LDFLAGS="-pthread -lrt"
+
+. "$(dirname $0)"/config.sh
+
+config
+bin index index.c sync_path.c tommyds/tommyds/tommyhashlin.c tommyds/tommyds/tommylist.c ccan/ccan/pr_log/pr_log.c

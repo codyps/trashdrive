@@ -11,16 +11,15 @@
 #include <penny/print.h>
 
 #include <ccan/array_size/array_size.h>
-#include <ccan/pr_debug/pr_debug.h>
-#include <ccan/darray/darray.h>
+#include <ccan/pr_log/pr_log.h>
 #include <ccan/err/err.h>
 #include <ccan/compiler/compiler.h>
 
 #include <tommyds/tommyhashlin.h>
 
+#include "darray.h"
 #include "sync_path.h"
 #include "block_list.h"
-
 
 #if 0
 #include <linux/fanotify.h>
@@ -96,7 +95,7 @@ static size_t dirent_name_len(struct dirent *d)
 static char *full_path_of_entry(struct dir const *dir, struct dirent *d,
 		darray_char *v)
 {
-	pr_debug(4, "FPOE: dir=%.*s dirent=%.*s",
+	pr_debug("FPOE: dir=%.*s dirent=%.*s",
 			(int)dir->name_len, dir->name, (int)dirent_name_len(d), d->d_name);
 	return full_path_of_file(dir, d->d_name, dirent_name_len(d), v);
 }
@@ -173,7 +172,7 @@ static struct dir *dir_create(struct sync_path *sp, char const *path, struct dir
 	d->name[name_len] = '\0';
 
 	/* add notifiers */
-	pr_debug(3, "Adding watch on %s", path);
+	pr_debug("Adding watch on %s", path);
 	int wd = inotify_add_watch(sp->inotify_fd,
 			path, IN_ALL_EVENTS);
 	if (wd == -1)
